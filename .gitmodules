@@ -1,0 +1,7 @@
+[submodule "azure_kinect_ros_driver"]
+	path = azure_kinect_ros_driver
+	url = https://github.com/atyshka/Azure_Kinect_ROS_Driver
+	branch = jazzy
+[submodule "hue_depth_encoding"]
+	path = hue_depth_encoding
+	url = https://github.com/cheind/hue-depth-encoding.git
