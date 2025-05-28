@@ -11,6 +11,7 @@ def launch_setup(context, *args, **kwargs):
     serials = LaunchConfiguration('serials').perform(context)
     bag_base_name = LaunchConfiguration('bag_base_name').perform(context)
     record = LaunchConfiguration('record').perform(context).lower() == 'true'
+    compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
     
     if not serials.strip():
         serial_list = ['']  # Default to a single camera with no serial specified
@@ -26,6 +27,12 @@ def launch_setup(context, *args, **kwargs):
         driver_args = {
             'color_enabled': 'True',
             'depth_enabled': 'True',
+            'color_format': 'jpeg' if compressed else 'bgra',
+            'color_resolution': '2160P',
+            'depth_mode': 'NFOV_UNBINNED',
+            'fps': '30',
+            'point_cloud': 'False',
+            'rgb_point_cloud': 'False',
             'camera_name': cam_name
         }
         if serial:
@@ -52,7 +59,7 @@ def launch_setup(context, *args, **kwargs):
                         'input_topic': 'depth/image_raw',
                         'output_topic': 'depth/hue_encoded',
                         'min_depth': 0.5,
-                        'max_depth': 3.0,
+                        'max_depth': 2.0,
                     }]
                 ),
                 Node(
@@ -63,7 +70,12 @@ def launch_setup(context, *args, **kwargs):
                     remappings=[
                         ('in', 'depth/hue_encoded'),
                         ('out', 'hue_encoded_depth')
-                    ]
+                    ],
+                    parameters=[{
+                        '.hue_encoded_depth.ffmpeg.encoding': 'h264_nvenc',
+                        '.hue_encoded_depth.ffmpeg.pix_fmt': 'gbrp',
+                        '.hue_encoded_depth.ffmpeg.tune': 'lossless',
+                    }]
                 )
             ])
         )
@@ -76,7 +88,7 @@ def launch_setup(context, *args, **kwargs):
                 executable='multi_rgbd_to_bag',
                 name='multi_rgbd_to_bag_recorder',
                 output='screen',
-                arguments=['--cameras', ','.join(cam_names), '--bag_base_name', bag_base_name]
+                arguments=['--cameras', ','.join(cam_names), '--bag_base_name', bag_base_name, '--compressed' if compressed else ''],
             )
         )
     return actions
@@ -86,5 +98,6 @@ def generate_launch_description():
         DeclareLaunchArgument('serials', default_value='', description='Comma-separated list of camera serial numbers'),
         DeclareLaunchArgument('bag_base_name', default_value='rgbd_bag', description='Base name for bag files'),
         DeclareLaunchArgument('record', default_value='true', description='Enable recording to bag file'),
+        DeclareLaunchArgument('compressed', default_value='true', description='Use compressed depth and color images'),
         OpaqueFunction(function=launch_setup)
     ])
