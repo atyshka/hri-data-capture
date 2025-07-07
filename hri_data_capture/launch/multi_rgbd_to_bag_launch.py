@@ -1,18 +1,21 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess, Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace
 from launch.actions import IncludeLaunchDescription, GroupAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
+from datetime import datetime
 
 def launch_setup(context, *args, **kwargs):
     serials = LaunchConfiguration('serials').perform(context)
     bag_base_name = LaunchConfiguration('bag_base_name').perform(context)
+    bag_file_name = f"{bag_base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     record = LaunchConfiguration('record').perform(context).lower() == 'true'
     compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
-    
+    record_audio = LaunchConfiguration('audio').perform(context).lower() == 'true'
+
     if not serials.strip():
         serial_list = ['']  # Default to a single camera with no serial specified
         cam_names = ['camera']
@@ -21,6 +24,8 @@ def launch_setup(context, *args, **kwargs):
         cam_names = [f'camera_{serial}' for serial in serial_list]
     
     actions = []
+    os.makedirs(bag_file_name, exist_ok=True) 
+
     # Launch camera drivers and hue encoders
     for serial, cam_name in zip(serial_list, cam_names):
         namespace = cam_name
@@ -67,14 +72,17 @@ def launch_setup(context, *args, **kwargs):
                     executable='republish',
                     name='ffmpeg_republisher',
                     output='screen',
+                    on_exit=Shutdown(),
                     remappings=[
                         ('in', 'depth/hue_encoded'),
-                        ('out', 'hue_encoded_depth')
+                        ('out', 'depth/hue_encoded')
                     ],
                     parameters=[{
-                        '.hue_encoded_depth.ffmpeg.encoding': 'h264_nvenc',
-                        '.hue_encoded_depth.ffmpeg.pix_fmt': 'gbrp',
-                        '.hue_encoded_depth.ffmpeg.tune': 'lossless',
+                        'in_transport': 'raw',
+                        'out_transport': 'ffmpeg',
+                        '.depth.hue_encoded.ffmpeg.encoding': 'h264_nvenc',
+                        '.depth.hue_encoded.ffmpeg.pix_fmt': 'gbrp',
+                        '.depth.hue_encoded.ffmpeg.tune': 'lossless',
                     }]
                 )
             ])
@@ -82,13 +90,39 @@ def launch_setup(context, *args, **kwargs):
     
     # Only add the recorder node if recording is enabled
     if record:
+        topics = ['/clock', '/tf', '/tf_static']
+        for cam_name in cam_names:
+            if compressed:
+                topics.append(f'/{cam_name}/depth/hue_encoded/ffmpeg')
+                topics.append(f'/{cam_name}/rgb/image_raw/compressed')
+            else:
+                topics.append(f'/{cam_name}/depth/image_raw')
+                topics.append(f'/{cam_name}/rgb/image_raw')
+            topics.append(f'/{cam_name}/rgb/camera_info')
+            topics.append(f'/{cam_name}/depth/camera_info')
         actions.append(
-            Node(
-                package='hri_data_capture',
-                executable='multi_rgbd_to_bag',
-                name='multi_rgbd_to_bag_recorder',
+            ExecuteProcess(
+                cmd=['ros2', 'bag', 'record', '-o', bag_file_name + '/bag', '--topics'] + topics,
                 output='screen',
-                arguments=['--cameras', ','.join(cam_names), '--bag_base_name', bag_base_name, '--compressed' if compressed else ''],
+                name='multi_rgbd_to_bag_recorder'
+            )
+        )
+        # actions.append(
+        #     Node(
+        #         package='hri_data_capture',
+        #         executable='multi_rgbd_to_bag',
+        #         name='multi_rgbd_to_bag_recorder',
+        #         output='screen',
+        #         arguments=['--cameras', ','.join(cam_names), '--bag_base_name', bag_base_name, '--compressed' if compressed else ''],
+        #     )
+        # )
+    if record_audio:
+        actions.append(
+            ExecuteProcess(
+                cmd=['arecord', '-D', 'plughw:CARD=Array', '-f', 'S32_LE', '-c', '7', '-r', '48000', bag_file_name + '/cam0_$(date +%Y-%m-%d_%H-%M-%S-%3N).wav'],
+                output='screen',
+                name='audio_recorder',
+                shell=True,
             )
         )
     return actions
@@ -98,6 +132,7 @@ def generate_launch_description():
         DeclareLaunchArgument('serials', default_value='', description='Comma-separated list of camera serial numbers'),
         DeclareLaunchArgument('bag_base_name', default_value='rgbd_bag', description='Base name for bag files'),
         DeclareLaunchArgument('record', default_value='true', description='Enable recording to bag file'),
+        DeclareLaunchArgument('audio', default_value='true', description='Enable audio recording'),
         DeclareLaunchArgument('compressed', default_value='true', description='Use compressed depth and color images'),
         OpaqueFunction(function=launch_setup)
     ])

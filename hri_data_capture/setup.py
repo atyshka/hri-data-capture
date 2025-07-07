@@ -27,6 +27,7 @@ setup(
             'rgb_to_bag = hri_data_capture.rgb_to_bag:main',
             'multi_rgbd_to_bag = hri_data_capture.multi_rgbd_to_bag:main',
             'hue_encode_depth = hri_data_capture.hue_encode_depth:main',
+            'hue_decode_depth = hri_data_capture.hue_decode_depth:main',
         ],
     },
 )
