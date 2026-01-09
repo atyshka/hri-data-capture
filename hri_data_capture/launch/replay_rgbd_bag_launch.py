@@ -1,6 +1,6 @@
 from ament_index_python import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess, Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
@@ -10,15 +10,22 @@ def launch_setup(context, *args, **kwargs):
     bag_path = LaunchConfiguration('bag_path').perform(context)
 
     compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
-    cam_names = [s.strip() for s in LaunchConfiguration('cameras').perform(context).split(',') if s.strip()]
+    compressed_video = LaunchConfiguration('compressed_video').perform(context).lower() == 'true'
+    serials = LaunchConfiguration('serials').perform(context)
+    if not serials.strip():
+        serial_list = ['']  # Default to a single camera with no serial specified
+        cam_names = ['camera']
+    else:
+        serial_list = [s.strip() for s in serials.split(',') if s.strip()]
+        cam_names = [f'camera_{serial}' for serial in serial_list]
     actions = []
 
-    # # Play the bag file
-    # actions.append(
-    #     ExecuteProcess(
-    #         cmd=['ros2', 'bag', 'play', bag_path, '--loop', '--clock'],
-    #         output='screen' )
-    # )
+    # Play the bag file
+    actions.append(
+        ExecuteProcess(
+            cmd=['ros2', 'bag', 'play', bag_path + '/bag', '--loop', '--clock', '--progress-bar-update-rate', '0'],
+            output='screen', on_exit=Shutdown() )
+    )
 
     # For each camera, run a republisher for ffmpeg data
     for cam_name in cam_names:
@@ -36,36 +43,6 @@ def launch_setup(context, *args, **kwargs):
                 }]
             )
         )
-        # actions.append(
-        #     Node(
-        #                 package='image_transport',
-        #                 executable='republish',
-        #                 name=f'rgb_republisher_{cam_name}',
-        #                 remappings=[
-        #                     ('in', f'/{cam_name}/rgb/image_raw'),
-        #                     ('out', f'/{cam_name}/rgb/image_raw')
-        #                 ],
-        #                 parameters=[{
-        #                     'in_transport': 'compressed',
-        #                     'out_transport': 'raw',
-        #                     'use_sim_time': True
-        #                 }]
-        #             ),
-        # )
-        # actions.append(Node(
-        #                 package="image_proc",
-        #                 executable="rectify_node",
-        #                 name="rectify_rgb_node",
-        #                 remappings=[
-        #                     ('image', f'/{cam_name}/rgb/image_raw'),
-        #                     ('camera_info', f'/{cam_name}/rgb/camera_info'),
-        #                     ('image_rect', f'/{cam_name}/rgb/image_rect'),
-        #                 ],
-        #                 parameters=[{
-        #                     'image_transport': 'compressed',
-        #                     'use_sim_time': True,
-        #                 }],
-        #             ),)
 
     # Launch depth image processor nodes for producing a point cloud
     for cam_name in cam_names:
@@ -87,7 +64,22 @@ def launch_setup(context, *args, **kwargs):
                         parameters=[{
                             'in_transport': 'ffmpeg',
                             'out_transport': 'raw',
-                            'camera.depth.hue_encoded.ffmpeg.map.h264_nvenc': 'h264_cuvid',
+                            f'{cam_name}.depth.hue_encoded.ffmpeg.map.h264_nvenc': 'h264_cuvid',
+                            'use_sim_time': True
+                        }]
+                    ),
+                    ComposableNode(
+                        package='image_transport',
+                        plugin='image_transport::Republisher',
+                        name=f'ffmpeg_republisher_{cam_name}_rgb',
+                        remappings=[
+                            ('in', f'/{cam_name}/rgb/image_raw'),
+                            ('out', f'/{cam_name}/rgb/image_raw')
+                        ],
+                        parameters=[{
+                            'in_transport': 'ffmpeg',
+                            'out_transport': 'raw',
+                            f'{cam_name}.rgb.image_raw.ffmpeg.map.h264_nvenc': 'h264_cuvid',
                             'use_sim_time': True
                         }]
                     ),
@@ -95,7 +87,7 @@ def launch_setup(context, *args, **kwargs):
                     ComposableNode(
                         package="image_proc",
                         plugin="image_proc::RectifyNode",
-                        name="rectify_node",
+                        name=f'rectify_{cam_name}',
                         remappings=[
                             ('image', f'/{cam_name}/depth/image_raw'),
                             ('camera_info', f'/{cam_name}/depth/camera_info'),
@@ -103,20 +95,21 @@ def launch_setup(context, *args, **kwargs):
                         ],
                         parameters=[{
                             'use_sim_time': True,
+                            'queue_size': 30
                         }],
                     ),
                     ComposableNode(
                         package="image_proc",
                         plugin="image_proc::RectifyNode",
-                        name="rectify_rgb_node",
+                        name=f'rectify_rgb_{cam_name}',
                         remappings=[
                             ('image', f'/{cam_name}/rgb/image_raw'),
                             ('camera_info', f'/{cam_name}/rgb/camera_info'),
                             ('image_rect', f'/{cam_name}/rgb/image_rect'),
                         ],
                         parameters=[{
-                            'image_transport': 'compressed',
                             'use_sim_time': True,
+                            'queue_size': 30
                         }],
                     ),
                 ],
@@ -143,5 +136,6 @@ def generate_launch_description():
         DeclareLaunchArgument('bag_path', description='Path to the bag file to replay'),
         DeclareLaunchArgument('cameras', default_value='camera', description='Comma-separated list of camera namespaces'),
         DeclareLaunchArgument('compressed', default_value='true', description='Use compressed depth and color images'),
+        DeclareLaunchArgument('compressed_video', default_value='true', description='Use compressed video for RGB images'),
         OpaqueFunction(function=launch_setup)
     ])
